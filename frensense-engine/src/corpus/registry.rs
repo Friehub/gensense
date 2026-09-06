@@ -49,7 +49,7 @@ pub struct PatternRegistry {
     idf_weights: FxHashMap<u64, f32>,
     api_idf_weights: FxHashMap<u64, f32>,
     /// Per-category learned feature weights (trained at build time or loaded from bundle).
-    pub category_weights: std::collections::HashMap<String, [f64; 15]>,
+    pub category_weights: std::collections::HashMap<String, [f64; 20]>,
     /// Auto-derived semantic filter suggestions (import + call exclusivity).
     pub auto_filter_stats: Option<crate::auto_filter::AutoFilterStats>,
     /// Per-pattern sigmoid calibration (A, B) parameters, keyed by pattern id.
@@ -408,7 +408,7 @@ impl PatternRegistry {
 
     /// Override per-category feature weights. Used to calibrate detection for
     /// specific vulnerability classes without retraining the full corpus.
-    pub fn set_category_weights(&mut self, category: &str, weights: [f64; 15]) {
+    pub fn set_category_weights(&mut self, category: &str, weights: [f64; 20]) {
         self.category_weights.insert(category.to_string(), weights);
     }
 

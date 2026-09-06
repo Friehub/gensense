@@ -341,7 +341,7 @@ impl PatternScorer {
         expected_context: Option<&crate::context::FileContext>,
         actual_context: Option<&crate::context::FileContext>,
         ngram_sim_threshold: f64,
-        weights: &[f64; 15],
+        weights: &[f64; 20],
     ) -> f64 {
         let (score, _) = Self::score_against_corpus_with_evidence_impl(
             candidate,
@@ -370,7 +370,7 @@ impl PatternScorer {
         expected_context: Option<&crate::context::FileContext>,
         actual_context: Option<&crate::context::FileContext>,
         _ngram_sim_threshold: f64,
-        weights: &[f64; 15],
+        weights: &[f64; 20],
     ) -> (f64, MatchEvidence) {
         Self::score_against_corpus_with_evidence_impl(
             candidate,
@@ -394,7 +394,7 @@ impl PatternScorer {
         expected_context: Option<&crate::context::FileContext>,
         actual_context: Option<&crate::context::FileContext>,
         _ngram_sim_threshold: f64,
-        weights: &[f64; 15],
+        weights: &[f64; 20],
         dim_cache: &mut DimCache,
     ) -> (f64, MatchEvidence) {
         Self::score_against_corpus_with_evidence_impl(
@@ -416,7 +416,7 @@ impl PatternScorer {
         expected_context: Option<&crate::context::FileContext>,
         actual_context: Option<&crate::context::FileContext>,
         _ngram_sim_threshold: f64,
-        weights: &[f64; 15],
+        weights: &[f64; 20],
         mut dim_cache: Option<&mut DimCache>,
     ) -> (f64, MatchEvidence) {
         // Inline helper: look up or compute raw_dimensions for a target.
@@ -527,7 +527,7 @@ impl PatternScorer {
         // For other dimensions, use Jaccard-based difference (pos_sim - neg_sim).
         let mut worst_neg = RawDimensions::default();
         for negative in negatives {
-            let dim = raw_dim(negative, true);
+            let dim = Self::raw_dimensions(candidate, negative, true);
             if dim.ngram_sim > worst_neg.ngram_sim {
                 worst_neg.ngram_sim = dim.ngram_sim;
             }
@@ -572,6 +572,21 @@ impl PatternScorer {
             }
             if dim.literal_concat_sim > worst_neg.literal_concat_sim {
                 worst_neg.literal_concat_sim = dim.literal_concat_sim;
+            }
+            if dim.ngram_containment > worst_neg.ngram_containment {
+                worst_neg.ngram_containment = dim.ngram_containment;
+            }
+            if dim.api_containment > worst_neg.api_containment {
+                worst_neg.api_containment = dim.api_containment;
+            }
+            if dim.flow_containment > worst_neg.flow_containment {
+                worst_neg.flow_containment = dim.flow_containment;
+            }
+            if dim.ngram_overlap > worst_neg.ngram_overlap {
+                worst_neg.ngram_overlap = dim.ngram_overlap;
+            }
+            if dim.api_overlap > worst_neg.api_overlap {
+                worst_neg.api_overlap = dim.api_overlap;
             }
         }
 
@@ -647,7 +662,7 @@ impl PatternScorer {
         target: &FunctionFingerprint,
         _is_positive: bool,
         _ngram_sim_threshold: f64,
-        weights: &[f64; 15],
+        weights: &[f64; 20],
     ) -> f64 {
         let dim = Self::raw_dimensions(candidate, target, !_is_positive);
         let score = dim.weighted_score(weights);
@@ -678,7 +693,7 @@ impl PatternScorer {
         candidate: &FunctionFingerprint,
         positives: &[FunctionFingerprint],
         negatives: &[FunctionFingerprint],
-        weights: &[f64; 15],
+        weights: &[f64; 20],
     ) -> MatchEvidence {
         Self::score_against_corpus_with_evidence_impl(
             candidate, positives, negatives, None, None, 0.0, weights, None,
@@ -691,138 +706,86 @@ impl PatternScorer {
         target: &FunctionFingerprint,
         _is_negative: bool,
     ) -> RawDimensions {
-        let overlap = |a: &[u64], b: &[u64]| -> f64 {
-            if a.is_empty() && b.is_empty() {
-                return 0.5; // Both empty — neutral
-            }
-            if a.is_empty() || b.is_empty() {
-                return 0.0;
-            }
-            minhash::overlap_coefficient_sorted(a, b)
-        };
-        let overlap_sorted = |a: &[u64], b: &[u64]| -> f64 {
-            if a.is_empty() && b.is_empty() {
-                return 0.5; // Both empty — neutral
-            }
-            if a.is_empty() || b.is_empty() {
-                return 0.0;
-            }
-            minhash::overlap_coefficient_sorted(a, b)
-        };
+        let jaccard = |a: &[u64], b: &[u64]| minhash::jaccard_similarity_sorted(a, b);
+        let overlap = |a: &[u64], b: &[u64]| minhash::overlap_coefficient_sorted(a, b);
+        let containment = |a: &[u64], b: &[u64]| minhash::containment_sorted(a, b);
 
         let ngram_sim = if candidate.weighted_ngram_hashes.is_empty()
             || target.weighted_ngram_hashes.is_empty()
         {
-            overlap(&candidate.ngram_hashes, &target.ngram_hashes)
+            jaccard(&candidate.ngram_hashes, &target.ngram_hashes)
         } else {
-            weighted_overlap_coefficient(
-                &candidate.weighted_ngram_hashes,
-                &target.weighted_ngram_hashes,
-            )
+            let mut intersection = 0.0f64;
+            let mut union_sum = 0.0f64;
+            for (h, w) in &candidate.weighted_ngram_hashes {
+                union_sum += *w as f64;
+                if target.weighted_ngram_hashes.contains_key(h) {
+                    intersection += *w as f64;
+                }
+            }
+            for w in target.weighted_ngram_hashes.values() {
+                union_sum += *w as f64;
+            }
+            if union_sum == 0.0 {
+                0.0
+            } else {
+                intersection / union_sum
+            }
         };
 
-        let semantic_sim = overlap(&candidate.semantic_markers, &target.semantic_markers);
+        let semantic_sim = jaccard(&candidate.semantic_markers, &target.semantic_markers);
 
-        // Tree-edit distance is O(n²) LCS — skip when ngram is too low for
-        // a perfect AST match to meaningfully move the weighted score.
-        let ast_sim = if !candidate.skeleton_hashes.is_empty()
-            && !target.skeleton_hashes.is_empty()
-            && ngram_sim > AST_NGRAM_MIN_THRESHOLD
+        let ast_sim = if !candidate.skeleton_hashes.is_empty() && !target.skeleton_hashes.is_empty()
         {
             1.0 - crate::ast_distance::tree_edit_distance(
                 &candidate.skeleton_hashes,
                 &target.skeleton_hashes,
             )
         } else {
-            overlap(&candidate.structural_markers, &target.structural_markers)
+            jaccard(&candidate.structural_markers, &target.structural_markers)
         };
 
-        let signature_sim = overlap_sorted(&candidate.signature_ngrams, &target.signature_ngrams);
-        let param_type_sim =
-            overlap_sorted(&candidate.param_type_ngrams, &target.param_type_ngrams);
+        let signature_sim = jaccard(&candidate.signature_ngrams, &target.signature_ngrams);
+        let param_type_sim = jaccard(&candidate.param_type_ngrams, &target.param_type_ngrams);
         let type_usage_sim = type_usage_overlap(candidate, target);
-        let cf_sim = overlap(&candidate.control_flow_hashes, &target.control_flow_hashes);
-        // Fix: api_sim uses max of full-name Jaccard and segment Jaccard.
-        // Full names are too specific (models.sequelize.query ≠ sequelize.query),
-        // segments capture the method name (query) for cross-variant matching.
-        let api_sim_full = overlap(&candidate.api_calls, &target.api_calls);
-        let api_sim_seg =
-            if !candidate.api_call_segments.is_empty() && !target.api_call_segments.is_empty() {
-                overlap(&candidate.api_call_segments, &target.api_call_segments)
-            } else {
-                0.0
-            };
-        let api_sim = api_sim_full.max(api_sim_seg);
+        let cf_sim = jaccard(&candidate.control_flow_hashes, &target.control_flow_hashes);
 
-        let containment = |candidate: &[u64], target: &[u64]| -> f64 {
-            if target.is_empty() {
-                return 0.5;
-            }
-            if candidate.is_empty() {
-                return 0.0;
-            }
-            let mut i = 0;
-            let mut j = 0;
-            let mut intersection = 0;
-            while i < candidate.len() && j < target.len() {
-                if candidate[i] == target[j] {
-                    intersection += 1;
-                    i += 1;
-                    j += 1;
-                } else if candidate[i] < target[j] {
-                    i += 1;
-                } else {
-                    j += 1;
-                }
-            }
-            (intersection as f64) / (target.len() as f64)
-        };
-
-        let motif_sim = containment(&candidate.motif_hashes, &target.motif_hashes);
-        let flow_sim = containment(
+        let api_sim = jaccard(&candidate.api_calls, &target.api_calls).max(jaccard(
+            &candidate.api_call_segments,
+            &target.api_call_segments,
+        ));
+        let motif_sim = jaccard(&candidate.motif_hashes, &target.motif_hashes);
+        let flow_sim = jaccard(
             &candidate.data_flow_path_hashes,
             &target.data_flow_path_hashes,
         );
-        let tainted_api_sim =
-            if candidate.tainted_api_calls.is_empty() && target.tainted_api_calls.is_empty() {
-                1.0 // Both have no tainted calls — they agree; neutral match.
-            } else {
-                overlap(&candidate.tainted_api_calls, &target.tainted_api_calls)
-            };
-        let config_sim = overlap(
+        let tainted_api_sim = jaccard(&candidate.tainted_api_calls, &target.tainted_api_calls);
+        let config_sim = jaccard(
             &candidate.config_literal_hashes,
             &target.config_literal_hashes,
         );
-        // Control flow ordering: LCS match on the sequence
-        let cf_order_sim = if candidate.control_flow_sequence.is_empty()
-            && target.control_flow_sequence.is_empty()
-        {
-            1.0
-        } else {
-            crate::pattern::scorer::lcs_similarity(
-                &candidate.control_flow_sequence,
-                &target.control_flow_sequence,
-            )
-        };
+        let cf_order_sim = jaccard(
+            &candidate.control_flow_sequence,
+            &target.control_flow_sequence,
+        );
+        let arg_type_sim = jaccard(&candidate.argument_call_types, &target.argument_call_types);
+        let literal_concat_sim = jaccard(
+            &candidate.literal_pattern_hashes,
+            &target.literal_pattern_hashes,
+        );
 
-        // New dimensions: argument call types and string literal patterns
-        let arg_type_sim = if !candidate.argument_call_types.is_empty()
-            && !target.argument_call_types.is_empty()
-        {
-            overlap(&candidate.argument_call_types, &target.argument_call_types)
-        } else {
-            0.0
-        };
-        let literal_concat_sim = if !candidate.literal_pattern_hashes.is_empty()
-            && !target.literal_pattern_hashes.is_empty()
-        {
-            overlap(
-                &candidate.literal_pattern_hashes,
-                &target.literal_pattern_hashes,
-            )
-        } else {
-            0.0
-        };
+        // For containment, target is the needle, candidate is the haystack.
+        // wait, we want to know if the target (vulnerability) is contained in candidate.
+        // minhash::containment_sorted(needle, haystack) means needle ∩ haystack / needle.len().
+        let ngram_containment = containment(&target.ngram_hashes, &candidate.ngram_hashes);
+        let api_containment = containment(&target.api_calls, &candidate.api_calls);
+        let flow_containment = containment(
+            &target.data_flow_path_hashes,
+            &candidate.data_flow_path_hashes,
+        );
+
+        let ngram_overlap = overlap(&candidate.ngram_hashes, &target.ngram_hashes);
+        let api_overlap = overlap(&candidate.api_calls, &target.api_calls);
 
         RawDimensions {
             ngram_sim,
@@ -840,6 +803,11 @@ impl PatternScorer {
             cf_order_sim,
             arg_type_sim,
             literal_concat_sim,
+            ngram_containment,
+            api_containment,
+            flow_containment,
+            ngram_overlap,
+            api_overlap,
         }
     }
 }
@@ -865,25 +833,31 @@ pub type DimCache = rustc_hash::FxHashMap<u64, RawDimensions>;
 /// Intermediate raw-dimension values used internally by evidence computation.
 #[derive(Clone, Copy, Default)]
 pub struct RawDimensions {
-    ngram_sim: f64,
-    ast_sim: f64,
-    signature_sim: f64,
-    param_type_sim: f64,
-    type_usage_sim: f64,
-    semantic_sim: f64,
-    cf_sim: f64,
-    api_sim: f64,
-    motif_sim: f64,
-    flow_sim: f64,
-    tainted_api_sim: f64,
-    config_sim: f64,
-    cf_order_sim: f64,
-    arg_type_sim: f64,
-    literal_concat_sim: f64,
+    pub ngram_sim: f64,
+    pub ast_sim: f64,
+    pub signature_sim: f64,
+    pub param_type_sim: f64,
+    pub type_usage_sim: f64,
+    pub semantic_sim: f64,
+    pub cf_sim: f64,
+    pub api_sim: f64,
+    pub motif_sim: f64,
+    pub flow_sim: f64,
+    pub tainted_api_sim: f64,
+    pub config_sim: f64,
+    pub cf_order_sim: f64,
+    pub arg_type_sim: f64,
+    pub literal_concat_sim: f64,
+    // Multi-signal additions
+    pub ngram_containment: f64,
+    pub api_containment: f64,
+    pub flow_containment: f64,
+    pub ngram_overlap: f64,
+    pub api_overlap: f64,
 }
 
 impl RawDimensions {
-    fn weighted_score(&self, w: &[f64; 15]) -> f64 {
+    pub fn weighted_score(&self, w: &[f64; 20]) -> f64 {
         self.ngram_sim * w[0]
             + self.ast_sim * w[1]
             + self.signature_sim * w[2]
@@ -899,6 +873,11 @@ impl RawDimensions {
             + self.cf_order_sim * w[12]
             + self.arg_type_sim * w[13]
             + self.literal_concat_sim * w[14]
+            + self.ngram_containment * w[15]
+            + self.api_containment * w[16]
+            + self.flow_containment * w[17]
+            + self.ngram_overlap * w[18]
+            + self.api_overlap * w[19]
     }
 
     pub fn apply_semantic_override(&self, base_score: f64) -> f64 {
@@ -1010,7 +989,7 @@ mod tests {
         let cand = make_fingerprint("fn get_password() { read_file() }", "b.rs", "rs");
         let default_w = &[
             0.10, 0.20, 0.08, 0.04, 0.03, 0.10, 0.08, 0.06, 0.12, 0.06, 0.10, 0.03, 0.02, 0.04,
-            0.04,
+            0.04, 0.02, 0.02, 0.02, 0.01, 0.01,
         ];
         let score =
             PatternScorer::score_against_corpus(&cand, &[pos], &[neg], None, None, 0.5, default_w);
@@ -1027,7 +1006,7 @@ mod tests {
         let cand = make_fingerprint("fn safe() { \"clean\".to_string() }", "b.rs", "rs");
         let default_w = &[
             0.10, 0.20, 0.08, 0.04, 0.03, 0.10, 0.08, 0.06, 0.12, 0.06, 0.10, 0.03, 0.02, 0.04,
-            0.04,
+            0.04, 0.02, 0.02, 0.02, 0.01, 0.01,
         ];
         let score =
             PatternScorer::score_against_corpus(&cand, &[pos], &[neg], None, None, 0.5, default_w);

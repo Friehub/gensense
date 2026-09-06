@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-use std::path::Path;
 use std::collections::{HashSet, VecDeque};
+use std::path::Path;
 
 use crate::cfg::build_cfg;
 use crate::cfg::def_use::DefUseChain;
@@ -158,25 +158,25 @@ fn trace_hops_to_source(
 ) -> Option<usize> {
     let mut queue = VecDeque::new();
     let mut visited = HashSet::new();
-    
+
     // queue elements: (use_idx, current_depth)
     queue.push_back((start_use_idx, 0));
     visited.insert(start_use_idx);
-    
+
     let mut states_visited = 0;
-    
+
     while let Some((use_idx, depth)) = queue.pop_front() {
         if depth >= MAX_DEPTH || states_visited >= MAX_STATES {
             continue;
         }
         states_visited += 1;
-        
+
         // Check all definitions that reach this use.
         for def in def_use.defs_reaching(use_idx) {
             if is_real_source(def, source, root, registry, local_tainted_vars) {
                 return Some(depth);
             }
-            
+
             // This def derives from an RHS expression referencing other variable(s)
             for (rhs_use_idx, rhs_use) in def_use.uses.iter().enumerate() {
                 if rhs_use.block_id == def.block_id

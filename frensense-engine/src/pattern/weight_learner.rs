@@ -17,7 +17,7 @@ use crate::fingerprint::FunctionFingerprint;
 use crate::minhash;
 use crate::pattern::scorer::type_usage_overlap;
 
-pub type FeatureVec = [f64; 15];
+pub type FeatureVec = [f64; 20];
 
 /// Hardcoded fallback weights used when there are fewer than `MIN_TRAINING_PAIRS`
 /// examples for a category.
@@ -32,6 +32,8 @@ pub type FeatureVec = [f64; 15];
 // See docs/SCORING_DIMENSIONS.md for analysis.
 pub(crate) const DEFAULT_WEIGHTS: FeatureVec = [
     0.08, 0.10, 0.08, 0.04, 0.03, 0.10, 0.10, 0.10, 0.14, 0.12, 0.16, 0.03, 0.02, 0.04, 0.04,
+    // New dimensions: ngram_containment, api_containment, flow_containment, ngram_overlap, api_overlap
+    0.02, 0.02, 0.02, 0.01, 0.01,
 ];
 
 /// Minimum number of positive + negative pairs required to train a per-category
@@ -49,115 +51,28 @@ fn extract_category(pattern_id: &str) -> &str {
 
 /// Compute the 8-d feature vector for a `(candidate, target)` fingerprint pair.
 fn compute_features(candidate: &FunctionFingerprint, target: &FunctionFingerprint) -> FeatureVec {
-    let jaccard = |a: &[u64], b: &[u64]| minhash::jaccard_similarity_sorted(a, b);
-
-    let ngram_sim =
-        if candidate.weighted_ngram_hashes.is_empty() || target.weighted_ngram_hashes.is_empty() {
-            jaccard(&candidate.ngram_hashes, &target.ngram_hashes)
-        } else {
-            // Weighted jaccard uses the IDF-weighted hashes
-            let mut intersection = 0.0f64;
-            let mut union_sum = 0.0f64;
-            for (h, w) in &candidate.weighted_ngram_hashes {
-                union_sum += *w as f64;
-                if target.weighted_ngram_hashes.contains_key(h) {
-                    intersection += *w as f64;
-                }
-            }
-            for w in target.weighted_ngram_hashes.values() {
-                union_sum += *w as f64;
-            }
-            if union_sum == 0.0 {
-                0.0
-            } else {
-                intersection / union_sum
-            }
-        };
-
-    let semantic_sim = jaccard(&candidate.semantic_markers, &target.semantic_markers);
-
-    let ast_sim = if !candidate.skeleton_hashes.is_empty() && !target.skeleton_hashes.is_empty() {
-        1.0 - crate::ast_distance::tree_edit_distance(
-            &candidate.skeleton_hashes,
-            &target.skeleton_hashes,
-        )
-    } else {
-        jaccard(&candidate.structural_markers, &target.structural_markers)
-    };
-
-    let sig_sim = jaccard(&candidate.signature_ngrams, &target.signature_ngrams);
-    let type_sim = jaccard(&candidate.param_type_ngrams, &target.param_type_ngrams);
-    let type_usage_sim = type_usage_overlap(candidate, target);
-    let cf_sim = jaccard(&candidate.control_flow_hashes, &target.control_flow_hashes);
-    // API sim: max of full-name and segment Jaccard (mirrors scorer)
-    let api_sim_full = jaccard(&candidate.api_calls, &target.api_calls);
-    let api_sim_seg =
-        if !candidate.api_call_segments.is_empty() && !target.api_call_segments.is_empty() {
-            jaccard(&candidate.api_call_segments, &target.api_call_segments)
-        } else {
-            0.0
-        };
-    let api_sim = api_sim_full.max(api_sim_seg);
-    let tainted_api_sim =
-        if candidate.tainted_api_calls.is_empty() && target.tainted_api_calls.is_empty() {
-            1.0 // Both have no tainted calls — they agree; neutral match.
-        } else {
-            jaccard(&candidate.tainted_api_calls, &target.tainted_api_calls)
-        };
-    let motif_sim = jaccard(&candidate.motif_hashes, &target.motif_hashes);
-    let flow_sim = jaccard(
-        &candidate.data_flow_path_hashes,
-        &target.data_flow_path_hashes,
-    );
-
-    let config_sim = jaccard(
-        &candidate.config_literal_hashes,
-        &target.config_literal_hashes,
-    );
-
-    let cf_order_sim =
-        if candidate.control_flow_sequence.is_empty() && target.control_flow_sequence.is_empty() {
-            1.0
-        } else {
-            crate::pattern::scorer::lcs_similarity(
-                &candidate.control_flow_sequence,
-                &target.control_flow_sequence,
-            )
-        };
-
-    let arg_type_sim =
-        if !candidate.argument_call_types.is_empty() && !target.argument_call_types.is_empty() {
-            jaccard(&candidate.argument_call_types, &target.argument_call_types)
-        } else {
-            0.0
-        };
-    let literal_concat_sim = if !candidate.literal_pattern_hashes.is_empty()
-        && !target.literal_pattern_hashes.is_empty()
-    {
-        jaccard(
-            &candidate.literal_pattern_hashes,
-            &target.literal_pattern_hashes,
-        )
-    } else {
-        0.0
-    };
-
+    let raw = crate::pattern::scorer::PatternScorer::raw_dimensions(candidate, target, false);
     [
-        ngram_sim,
-        ast_sim,
-        sig_sim,
-        type_sim,
-        type_usage_sim,
-        semantic_sim,
-        cf_sim,
-        api_sim,
-        tainted_api_sim,
-        motif_sim,
-        flow_sim,
-        config_sim,
-        cf_order_sim,
-        arg_type_sim,
-        literal_concat_sim,
+        raw.ngram_sim,
+        raw.ast_sim,
+        raw.signature_sim,
+        raw.param_type_sim,
+        raw.type_usage_sim,
+        raw.semantic_sim,
+        raw.cf_sim,
+        raw.api_sim,
+        raw.tainted_api_sim,
+        raw.motif_sim,
+        raw.flow_sim,
+        raw.config_sim,
+        raw.cf_order_sim,
+        raw.arg_type_sim,
+        raw.literal_concat_sim,
+        raw.ngram_containment,
+        raw.api_containment,
+        raw.flow_containment,
+        raw.ngram_overlap,
+        raw.api_overlap,
     ]
 }
 
@@ -174,7 +89,7 @@ fn predict(features: &FeatureVec, weights: &FeatureVec) -> f64 {
 /// Train weights for a single category using gradient descent.
 /// Positive and negative pairs are separately weighted to handle class imbalance.
 fn train_weights(positives: &[FeatureVec], negatives: &[FeatureVec]) -> FeatureVec {
-    let mut w = [0.5f64; 15];
+    let mut w = [0.5f64; 20];
 
     let n_pos = positives.len();
     let n_neg = negatives.len();
@@ -189,12 +104,12 @@ fn train_weights(positives: &[FeatureVec], negatives: &[FeatureVec]) -> FeatureV
     let neg_weight = if n_neg > 0 { 0.5 / n_neg as f64 } else { 0.0 };
 
     for _ in 0..ITERATIONS {
-        let mut grad = [0.0f64; 15];
+        let mut grad = [0.0f64; 20];
         for features in positives {
             let pred = predict(features, &w);
             let error = pred - 1.0;
             let wgt = pos_weight;
-            for i in 0..15 {
+            for i in 0..20 {
                 grad[i] += wgt * error * features[i];
             }
         }
@@ -202,11 +117,11 @@ fn train_weights(positives: &[FeatureVec], negatives: &[FeatureVec]) -> FeatureV
             let pred = predict(features, &w);
             let error = pred - 0.0;
             let wgt = neg_weight;
-            for i in 0..15 {
+            for i in 0..20 {
                 grad[i] += wgt * error * features[i];
             }
         }
-        for i in 0..15 {
+        for i in 0..20 {
             w[i] -= LEARNING_RATE * grad[i];
             w[i] = w[i].clamp(0.0, 1.0);
         }

@@ -573,6 +573,7 @@ mod tests {
         FunctionFingerprint {
             file_path: String::new(),
             function_name: String::new(),
+            region: None,
             line: 0,
             language: String::new(),
             ngram_hashes: Vec::new(),

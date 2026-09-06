@@ -102,6 +102,29 @@ pub fn overlap_coefficient_sorted(a: &[u64], b: &[u64]) -> f64 {
     intersection as f64 / min_len as f64
 }
 
+pub fn containment_sorted(a: &[u64], b: &[u64]) -> f64 {
+    if a.is_empty() {
+        return 1.0;
+    }
+    if b.is_empty() {
+        return 0.0;
+    }
+    let intersection = intersect_sorted(a, b);
+    intersection as f64 / a.len() as f64
+}
+
+pub fn size_ratio(a_len: usize, b_len: usize) -> f64 {
+    if a_len == 0 && b_len == 0 {
+        return 1.0;
+    }
+    if a_len == 0 || b_len == 0 {
+        return 0.0;
+    }
+    let min_len = std::cmp::min(a_len, b_len);
+    let max_len = std::cmp::max(a_len, b_len);
+    min_len as f64 / max_len as f64
+}
+
 #[allow(clippy::implicit_hasher)]
 pub fn jaccard_similarity(a: &FxHashSet<u64>, b: &FxHashSet<u64>) -> f64 {
     let intersection = a.intersection(b).count();
