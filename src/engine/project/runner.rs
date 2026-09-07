@@ -433,8 +433,9 @@ fn run_corpus_scan(
     // Override per-category weights for security categories where API call overlap
     // is the strongest signal but trained weights under-emphasize it.
     // These can be overridden via ScorerConfig::category_weight_overrides.
-    let default_sqli_weights: [f64; 15] = [
+    let default_sqli_weights: [f64; 20] = [
         0.05, 0.10, 0.04, 0.02, 0.02, 0.05, 0.04, 0.25, 0.30, 0.03, 0.05, 0.03, 0.02, 0.04, 0.04,
+        0.05, 0.05, 0.01, 0.02, 0.02,
     ];
     for category in &["sqli", "nosqli"] {
         let weights = engine

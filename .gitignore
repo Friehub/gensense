@@ -15,6 +15,7 @@ frensense.d.ts
 frensense.js
 index.js
 index.d.ts
+dist/
 
 # Frensense caches
 .frensense/
@@ -54,7 +55,13 @@ bom.json
 RULES.md
 future_improvements.md
 TODO.md
+build_errors.txt
+per_category_calibration.json
 *.log
+
+# Scripts (temporary / ad-hoc)
+fix_clippy.py
+patch_changelog.py
 
 # Other
 *.cast
@@ -72,3 +79,6 @@ tests/benchmarks/samples/
 # Secrets
 .env
 corpus/archived/
+
+# GPG keys (should never be committed)
+DEB-GPG-KEY*

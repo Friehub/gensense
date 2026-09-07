@@ -7,7 +7,6 @@ use crate::corpus::source_sink::{CorpusSourceSinkRegistry, build_registry_from_d
 use crate::data_flow::taint_metrics::TaintMetrics;
 use crate::data_flow::{TaintOrigin, TaintRegistry};
 use crate::fingerprint::{FunctionFingerprint, apply_idf_weights, compute_idf_weights};
-use crate::minhash::{LSHIndex, minhash_signature};
 use crate::pattern::evidence::MatchEvidence;
 use crate::pattern::scorer::{PatternScorer, ScorerConfig};
 use rayon::prelude::*;
@@ -40,8 +39,8 @@ pub struct PatternMatch {
 #[derive(Default)]
 pub struct PatternRegistry {
     patterns: Vec<CorpusPattern>,
-    lsh_index: Option<LSHIndex>,
-    lsh_index_api: Option<LSHIndex>,
+    containment_index: Option<crate::minhash::ContainmentIndex>,
+    containment_index_api: Option<crate::minhash::ContainmentIndex>,
     threshold: f64,
     ngram_sim_threshold: f64,
     struct_overlap_threshold: f64,
@@ -72,8 +71,8 @@ impl PatternRegistry {
     pub fn new(threshold: f64, ngram_sim_threshold: f64, struct_overlap_threshold: f64) -> Self {
         Self {
             patterns: Vec::new(),
-            lsh_index: None,
-            lsh_index_api: None,
+            containment_index: None,
+            containment_index_api: None,
             threshold,
             ngram_sim_threshold,
             struct_overlap_threshold,
@@ -161,7 +160,7 @@ impl PatternRegistry {
         self.source_sink = build_registry_from_dir(corpus_dir);
         self.patterns = patterns;
         self.compute_and_apply_idf();
-        self.build_lsh_index();
+        self.build_containment_index();
         Ok(count)
     }
 
@@ -180,7 +179,7 @@ impl PatternRegistry {
         let count = all_patterns.len();
         self.patterns = all_patterns;
         self.compute_and_apply_idf();
-        self.build_lsh_index();
+        self.build_containment_index();
         // Compute auto-filter stats from loaded patterns (fallback when bundle unavailable)
         if self.auto_filter_stats.is_none() {
             self.compute_auto_filter_stats(dirs);
@@ -304,7 +303,7 @@ impl PatternRegistry {
         if self.api_idf_weights.is_empty() {
             self.compute_api_idf();
         }
-        self.build_lsh_index();
+        self.build_containment_index();
         Ok(count)
     }
 
@@ -422,46 +421,31 @@ impl PatternRegistry {
             .unwrap_or(self.threshold)
     }
 
-    fn build_lsh_index(&mut self) {
+    fn build_containment_index(&mut self) {
         if self.patterns.len() < 10 {
             return;
         }
-        // Use default LSH parameters from minhash module.
-        // Threshold = (1/40)^(1/12) ≈ 0.71 — filters candidates to ~30-70 per function.
-        let num_hashes = crate::minhash::DEFAULT_NUM_HASHES;
-        let num_bands = crate::minhash::DEFAULT_BANDS;
-        let rows_per_band = crate::minhash::DEFAULT_ROWS_PER_BAND;
 
-        // Structural LSH (existing)
-        let mut struct_index = LSHIndex::new(num_bands, rows_per_band);
-        // API-call LSH (new — helps distinguish patterns by what they call)
-        let mut api_index = LSHIndex::new(num_bands, rows_per_band);
+        let mut struct_index = crate::minhash::ContainmentIndex::new();
+        let mut api_index = crate::minhash::ContainmentIndex::new();
 
         for (i, pattern) in self.patterns.iter().enumerate() {
-            // Issue 6 fix: index ALL positives, not just the first.
-            // Multi-function corpus patterns have a module-scope fingerprint AND
-            // a callback fingerprint. Only indexing first() means the callback is
-            // invisible to LSH queries, so pattern never matches the candidate callback.
             for fp in &pattern.positives {
                 // Structural signature
-                let sig_s = minhash_signature(&fp.structural_markers, num_hashes);
-                struct_index.insert(&sig_s, i as u64);
+                struct_index.insert(&fp.structural_markers, i as u64);
 
-                // API-call signature: use segments-only for recall on chained calls
-                // where full call text differs (e.g. .then chain includes different query args).
-                // Segments capture just the method name (query, then, catch, json, ...).
-                let sig_a = if !fp.api_call_segments.is_empty() {
-                    minhash_signature(&fp.api_call_segments, num_hashes)
+                // API-call signature
+                if !fp.api_call_segments.is_empty() {
+                    api_index.insert(&fp.api_call_segments, i as u64);
                 } else if !fp.api_calls.is_empty() {
-                    minhash_signature(&fp.api_calls, num_hashes)
+                    api_index.insert(&fp.api_calls, i as u64);
                 } else {
-                    minhash_signature(&fp.structural_markers, num_hashes)
-                };
-                api_index.insert(&sig_a, i as u64);
+                    api_index.insert(&fp.structural_markers, i as u64);
+                }
             }
         }
-        self.lsh_index = Some(struct_index);
-        self.lsh_index_api = Some(api_index);
+        self.containment_index = Some(struct_index);
+        self.containment_index_api = Some(api_index);
     }
 
     pub fn scan_function(
@@ -472,29 +456,27 @@ impl PatternRegistry {
         actual_context: Option<&crate::context::FileContext>,
     ) -> Vec<PatternMatch> {
         let t0 = std::time::Instant::now();
-        // Query both LSH tables (structural + API-call)
-        let struct_candidates: std::collections::HashSet<usize> = if let Some(ref lsh) =
-            self.lsh_index
-        {
-            let sig = minhash_signature(&fp.structural_markers, crate::minhash::DEFAULT_NUM_HASHES);
-            lsh.query(&sig)
-                .iter()
-                .map(|&id| id as usize)
-                .filter(|&id| id < self.patterns.len())
-                .collect()
-        } else {
-            (0..self.patterns.len()).collect()
-        };
+        let min_containment = 0.5; // 50% containment threshold
+        let struct_candidates: std::collections::HashSet<usize> =
+            if let Some(ref lsh) = self.containment_index {
+                lsh.query(&fp.structural_markers, min_containment)
+                    .iter()
+                    .map(|&id| id as usize)
+                    .filter(|&id| id < self.patterns.len())
+                    .collect()
+            } else {
+                (0..self.patterns.len()).collect()
+            };
         let api_candidates: std::collections::HashSet<usize> =
-            if let Some(ref lsh) = self.lsh_index_api {
-                let sig = if !fp.api_call_segments.is_empty() {
-                    minhash_signature(&fp.api_call_segments, crate::minhash::DEFAULT_NUM_HASHES)
+            if let Some(ref lsh) = self.containment_index_api {
+                let hashes = if !fp.api_call_segments.is_empty() {
+                    &fp.api_call_segments
                 } else if !fp.api_calls.is_empty() {
-                    minhash_signature(&fp.api_calls, crate::minhash::DEFAULT_NUM_HASHES)
+                    &fp.api_calls
                 } else {
-                    minhash_signature(&fp.structural_markers, crate::minhash::DEFAULT_NUM_HASHES)
+                    &fp.structural_markers
                 };
-                lsh.query(&sig)
+                lsh.query(hashes, min_containment)
                     .iter()
                     .map(|&id| id as usize)
                     .filter(|&id| id < self.patterns.len())

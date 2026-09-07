@@ -89,7 +89,7 @@ pub struct ScorerConfig {
 
     // --- Category-specific overrides ---
     /// Per-category weight overrides. Key = category name, value = 15-d weight vector.
-    pub category_weight_overrides: rustc_hash::FxHashMap<String, [f64; 15]>,
+    pub category_weight_overrides: rustc_hash::FxHashMap<String, [f64; 20]>,
 }
 
 impl Default for ScorerConfig {
@@ -137,7 +137,7 @@ const SEMANTIC_MATCH_BOOST: f64 = 2.0;
 const NOISE_GATE_MODERATE_SIGNAL: f64 = 0.15;
 const NOISE_GATE_STRONG_SIGNAL: f64 = 0.4;
 const NOISE_GATE_MIN_MODERATE_DIMS: usize = 2;
-const AST_NGRAM_MIN_THRESHOLD: f64 = 0.25;
+
 const BASE_SCORE_WEIGHT: f64 = 0.4;
 const STRUCTURAL_SCORE_WEIGHT: f64 = 0.3;
 const PROFILE_BOOST_WEIGHT: f64 = 0.3;
@@ -611,7 +611,7 @@ impl PatternScorer {
             0.0
         };
 
-        let signal: [f64; 15] = [
+        let signal: [f64; 20] = [
             (best_dim.ngram_sim - worst_neg.ngram_sim).max(0.0),
             (best_dim.ast_sim - worst_neg.ast_sim).max(0.0),
             (best_dim.signature_sim - worst_neg.signature_sim).max(0.0),
@@ -627,6 +627,11 @@ impl PatternScorer {
             (best_dim.cf_order_sim - worst_neg.cf_order_sim).max(0.0),
             (best_dim.arg_type_sim - worst_neg.arg_type_sim).max(0.0),
             (best_dim.literal_concat_sim - worst_neg.literal_concat_sim).max(0.0),
+            (best_dim.ngram_containment - worst_neg.ngram_containment).max(0.0),
+            (best_dim.api_containment - worst_neg.api_containment).max(0.0),
+            (best_dim.flow_containment - worst_neg.flow_containment).max(0.0),
+            (best_dim.ngram_overlap - worst_neg.ngram_overlap).max(0.0),
+            (best_dim.api_overlap - worst_neg.api_overlap).max(0.0),
         ];
 
         let max_signal = signal.iter().cloned().fold(0.0f64, f64::max);

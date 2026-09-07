@@ -4,7 +4,7 @@ use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 
 use crate::cfg::build_cfg;
-use crate::cfg::def_use::DefUseChain;
+
 use crate::cfg::def_use::compute_def_use;
 use crate::corpus::source_sink::CorpusSourceSinkRegistry;
 
@@ -56,7 +56,7 @@ impl TaintConfidenceAdjuster {
         source: &str,
         file_path: &Path,
         sink_line: u32,
-        sink_content: &str,
+        _sink_content: &str,
         original_confidence: f32,
         registry: &CorpusSourceSinkRegistry,
         local_tainted_vars: Option<&[String]>,

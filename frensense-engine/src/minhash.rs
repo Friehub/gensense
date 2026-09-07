@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
-use std::hash::{Hash, Hasher};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Number of MinHash signatures for LSH. Higher = more accurate similarity estimation.
 pub const DEFAULT_NUM_HASHES: usize = 120;
@@ -143,90 +142,78 @@ pub fn signature_similarity(a: &[u64], b: &[u64]) -> f64 {
     matches as f64 / a.len() as f64
 }
 
-pub struct LSHIndex {
-    /// Each band has a HashMap from bucket-hash → list of pattern IDs.
-    /// Unlike the old fixed-size bucket array (which collapsed all items
-    /// into `num_bands` slots), this scales naturally with item count —
-    /// essential for the target 45k+ corpus scale.
-    bands: Vec<FxHashMap<u64, Vec<u64>>>,
-    num_bands: usize,
-    rows_per_band: usize,
+pub struct ContainmentIndex {
+    /// Maps a raw feature hash (e.g., an N-Gram or API token) to a list of pattern IDs that contain it.
+    index: FxHashMap<u64, Vec<u64>>,
+    /// Stores the total number of features (hashes) originally inserted for each pattern ID.
+    /// This is used during querying to calculate exact containment: (hits / total_features).
+    pattern_sizes: FxHashMap<u64, usize>,
 }
 
-impl Default for LSHIndex {
+impl Default for ContainmentIndex {
     fn default() -> Self {
         Self {
-            bands: vec![FxHashMap::default(); DEFAULT_BANDS],
-            num_bands: DEFAULT_BANDS,
-            rows_per_band: DEFAULT_ROWS_PER_BAND,
+            index: FxHashMap::default(),
+            pattern_sizes: FxHashMap::default(),
         }
     }
 }
 
-impl LSHIndex {
-    pub fn new(num_bands: usize, rows_per_band: usize) -> Self {
-        Self {
-            bands: vec![FxHashMap::default(); num_bands],
-            num_bands,
-            rows_per_band,
+impl ContainmentIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Inserts a pattern's *raw* hashes (not a MinHash signature) into the index.
+    pub fn insert(&mut self, hashes: &[u64], item_id: u64) {
+        // We only count unique hashes towards the pattern size for containment purposes
+        let mut unique_hashes = hashes.to_vec();
+        unique_hashes.sort_unstable();
+        unique_hashes.dedup();
+
+        self.pattern_sizes.insert(item_id, unique_hashes.len());
+
+        for h in unique_hashes {
+            self.index.entry(h).or_default().push(item_id);
         }
     }
 
-    pub fn insert(&mut self, signature: &[u64], item_id: u64) {
-        for band in 0..self.num_bands {
-            let start = band * self.rows_per_band;
-            if start >= signature.len() {
-                break;
-            }
-            let end = (start + self.rows_per_band).min(signature.len());
-            let mut hasher = FxHasher::default();
-            for &val in &signature[start..end] {
-                val.hash(&mut hasher);
-            }
-            let bucket_key = hasher.finish();
-            self.bands[band]
-                .entry(bucket_key)
-                .or_default()
-                .push(item_id);
-        }
-    }
+    /// Queries the index using a candidate's *raw* hashes.
+    /// Returns pattern IDs that are contained within the candidate at >= `min_containment` threshold.
+    pub fn query(&self, query_hashes: &[u64], min_containment: f64) -> Vec<u64> {
+        let mut hits = FxHashMap::default();
 
-    pub fn query(&self, signature: &[u64]) -> Vec<u64> {
-        let mut candidates = FxHashSet::default();
-        let mut bands_matched = 0usize;
-        for band in 0..self.num_bands {
-            let start = band * self.rows_per_band;
-            if start >= signature.len() {
-                break;
-            }
-            let end = (start + self.rows_per_band).min(signature.len());
-            let mut hasher = FxHasher::default();
-            for &val in &signature[start..end] {
-                val.hash(&mut hasher);
-            }
-            let bucket_key = hasher.finish();
-            if let Some(ids) = self.bands[band].get(&bucket_key) {
-                bands_matched += 1;
-                for &fp in ids {
-                    candidates.insert(fp);
+        let mut unique_query_hashes = query_hashes.to_vec();
+        unique_query_hashes.sort_unstable();
+        unique_query_hashes.dedup();
+
+        for h in unique_query_hashes {
+            if let Some(pattern_ids) = self.index.get(&h) {
+                for &pid in pattern_ids {
+                    *hits.entry(pid).or_insert(0usize) += 1;
                 }
             }
         }
-        if candidates.len() > 100 {
-            tracing::debug!(
-                bands_matched,
-                candidates = candidates.len(),
-                signature_len = signature.len(),
-                "High number of LSH candidates found"
-            );
+
+        let mut candidates = Vec::new();
+        for (pid, count) in hits {
+            if let Some(&size) = self.pattern_sizes.get(&pid) {
+                if size == 0 {
+                    continue;
+                }
+                let containment = count as f64 / size as f64;
+                if containment >= min_containment {
+                    candidates.push(pid);
+                }
+            }
         }
-        candidates.into_iter().collect()
+
+        candidates
     }
 
-    /// Returns the total number of stored (band, bucket) entries across all bands.
-    /// Useful for diagnostics — at 45k patterns each band has ~bucket_count entries.
+    /// Returns the total number of unique hashes in the index.
     pub fn bucket_count(&self) -> usize {
-        self.bands.iter().map(|b| b.len()).sum()
+        self.index.len()
     }
 }
 
@@ -268,11 +255,23 @@ mod tests {
     }
 
     #[test]
-    fn test_lsh_index() {
-        let mut index = LSHIndex::new(4, 2);
-        let sig = minhash_signature(&[], 8);
-        index.insert(&sig, 42);
-        let candidates = index.query(&sig);
+    fn test_containment_index() {
+        let mut index = ContainmentIndex::new();
+        let pattern_hashes = vec![1, 2, 3];
+        index.insert(&pattern_hashes, 42);
+
+        // Exact match
+        let candidates = index.query(&pattern_hashes, 1.0);
         assert!(candidates.contains(&42));
+
+        // Partial match above threshold (2/3 = 0.66 > 0.6)
+        let query_hashes = vec![1, 2, 4, 5];
+        let candidates = index.query(&query_hashes, 0.6);
+        assert!(candidates.contains(&42));
+
+        // Partial match below threshold (1/3 = 0.33 < 0.6)
+        let query_hashes = vec![1, 6, 7];
+        let candidates = index.query(&query_hashes, 0.6);
+        assert!(!candidates.contains(&42));
     }
 }

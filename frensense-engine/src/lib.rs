@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_match)]
 #![allow(
     clippy::too_many_lines,
     clippy::too_many_arguments,

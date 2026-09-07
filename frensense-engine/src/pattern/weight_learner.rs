@@ -14,8 +14,6 @@ use std::collections::HashMap;
 
 use crate::corpus::loader::CorpusPattern;
 use crate::fingerprint::FunctionFingerprint;
-use crate::minhash;
-use crate::pattern::scorer::type_usage_overlap;
 
 pub type FeatureVec = [f64; 20];
 
@@ -171,6 +169,20 @@ pub fn learn_category_weights(patterns: &[CorpusPattern]) -> HashMap<String, Fea
                 let feats = compute_features(&pos_fps[i], &pos_fps[j]);
                 by_category.entry(cat.clone()).or_default().0.push(feats);
                 global_pos.push(feats);
+
+                // Synthetic Giant Positive:
+                // Simulate a Jaccard crash by shrinking similarity signals
+                // but preserving exact containment/overlap signals.
+                let mut giant_feats = feats;
+                for k in 0..15 {
+                    giant_feats[k] *= 0.05;
+                }
+                by_category
+                    .entry(cat.clone())
+                    .or_default()
+                    .0
+                    .push(giant_feats);
+                global_pos.push(giant_feats);
             }
         }
 
@@ -180,6 +192,18 @@ pub fn learn_category_weights(patterns: &[CorpusPattern]) -> HashMap<String, Fea
                 let feats = compute_features(pos, neg);
                 by_category.entry(cat.clone()).or_default().1.push(feats);
                 global_neg.push(feats);
+
+                // Synthetic Giant Negative
+                let mut giant_feats = feats;
+                for k in 0..15 {
+                    giant_feats[k] *= 0.05;
+                }
+                by_category
+                    .entry(cat.clone())
+                    .or_default()
+                    .1
+                    .push(giant_feats);
+                global_neg.push(giant_feats);
             }
         }
     }

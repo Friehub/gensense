@@ -98,16 +98,15 @@ pub fn cluster_functions(
         })
         .collect();
 
-    let mut index = frensense_engine::minhash::LSHIndex::default();
+    let mut index = frensense_engine::minhash::ContainmentIndex::default();
     for (i, sig) in signatures.iter().enumerate() {
         index.insert(sig, i as u64);
     }
 
-    // Union only pairs that share an LSH band bucket. This turns the dominant
-    // cost from n² full comparisons into n · k, where k is the average number
-    // of candidates returned per query (≈ log n).
+    // Union only pairs that share sufficient signature hashes. This turns the dominant
+    // cost from n² full comparisons into n · k.
     for i in 0..n {
-        for j in index.query(&signatures[i]) {
+        for j in index.query(&signatures[i], similarity_threshold) {
             let j = j as usize;
             if j <= i {
                 continue; // each unordered pair considered once

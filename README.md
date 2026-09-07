@@ -278,14 +278,41 @@ cargo run --bin corpus-quality -- corpus/targets/
 # Includes per-tier breakdown showing how many patterns need work.
 ```
 
-### Latest Benchmark (NodeGoat, July 2026)
+### Benchmarks
+
+Benchmarked on the current `v0.4.0-tasks` branch with `cargo build --release`.
+
+#### NodeGoat (2358 files, ~83K LOC)
+
+| Threshold | TP | FP | FN | Precision | Recall | F1 | Wall Time |
+|-----------|----|----|----|-----------|--------|----|-----------|
+| 0.20 | 22 | 28 | 8 | 0.440 | 0.733 | 0.550 | 0:40 |
+| 0.30 | 22 | 27 | 8 | 0.449 | 0.733 | 0.557 | 0:14 |
+| 0.40 | 22 | 27 | 8 | 0.449 | 0.733 | 0.557 | 0:12 |
+| 0.50 | 22 | 27 | 8 | 0.449 | 0.733 | 0.557 | 0:11 |
+| 0.60 | 22 | 27 | 8 | 0.449 | 0.733 | 0.557 | 0:11 |
+| 0.70 | 22 | 25 | 8 | **0.468** | **0.733** | **0.571** | 0:11 |
+
+Best F1 = 0.571 at threshold 0.70. 30 ground-truth labels (8 DATA_FLOW, 9 CONFIG, 9 MISSING_CALL, 4 API_DIFF).
+
+#### OWASP Juice Shop (208 files, ~15K LOC)
+
+| Threshold | TP | FP | FN | Precision | Recall | F1 | Wall Time |
+|-----------|----|----|----|-----------|--------|----|-----------|
+| 0.20 | 11 | 311 | 12 | 0.034 | 0.478 | 0.064 | 1:15 |
+| 0.30 | 10 | 278 | 13 | **0.035** | **0.435** | **0.064** | 1:10 |
+| 0.40 | 9 | 259 | 14 | 0.034 | 0.391 | 0.062 | 1:27 |
+| 0.50 | 9 | 253 | 14 | 0.034 | 0.391 | 0.063 | 1:23 |
+| 0.70 | 9 | 253 | 14 | 0.034 | 0.391 | 0.063 | 1:26 |
+
+Best F1 = 0.064 at threshold 0.30. 23 ground-truth labels. Juice Shop is a harder target because the codebase is much larger and patterns must generalize across many different route handlers.
+
+### Hand-crafted Filters
 
 | Metric | Before | After |
 |--------|--------|-------|
-| Findings at 0.5 threshold | 62 | **4** |
-| False positive rate | 76% | **50%** |
 | Hand-crafted filters | ~150 | **0** (all auto-learned) |
-| Scan time (113 functions) | ~48s | **~43s** |
+| Corpus patterns | 0 | **577** (FRC bundle embedded in binary) |
 
 ## License
 

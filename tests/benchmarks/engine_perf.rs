@@ -598,7 +598,7 @@ fn bench_post_process_ngrams(c: &mut Criterion) {
                 skeleton: Vec::new(),
                 control_flow_hashes: FxHashSet::default(),
                 api_calls: FxHashSet::default(),
-                property_accesses: FxHashSet::default(),
+                property_accesses: Vec::new(),
             });
         }
 
