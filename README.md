@@ -111,7 +111,7 @@ export async function handleDataSync(req: Request, db: Database) {
 
 Run the builder to compile your new custom `.frc` bundle:
 ```bash
-frensense corpus/targets/ --build-bundle
+frensense --build-bundle --corpus corpus/targets/
 ```
 Frensense parses your comment block straight from the AST and bakes it into the `.frc` bundle.
 
@@ -272,7 +272,7 @@ mutation guidelines, and the Frensense Hub corpus exchange proposal.
 
 ```bash
 # Score all corpus patterns (0-100). Run anytime to assess quality.
-cargo run --bin corpus-quality -- corpus/targets/
+corpus-quality corpus/targets/  # If installed via cargo, otherwise: cargo run --bin corpus-quality -- corpus/targets/
 
 # Output: TSV sorted by score (lowest first). Patterns below 50 need rewrites.
 # Includes per-tier breakdown showing how many patterns need work.

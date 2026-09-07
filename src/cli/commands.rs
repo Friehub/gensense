@@ -55,6 +55,10 @@ pub fn print_help() {
     );
     println!("  --profile-stats     Display profile statistics");
     println!();
+    println!("Corpus Development:");
+    println!("  --build-bundle       Compile the corpus into a binary .frc bundle");
+    println!("  --build-bundle-output <file>  Output path for the bundle (default: frensense-corpus.frc)");
+    println!();
     println!("Information:");
     println!("  --version           Display version and enabled features");
     println!("  --list-patterns     List loaded corpus patterns and their descriptions");
