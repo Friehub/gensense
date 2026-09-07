@@ -90,13 +90,32 @@ const CHECKS: &[MiddlewareCheck] = &[
     },
 ];
 
+fn get_stem(fname: &str) -> &str {
+    fname.trim_end_matches(".js").trim_end_matches(".ts")
+}
+
+fn is_server_entry(fname: &str) -> bool {
+    let stem = get_stem(fname);
+    stem == "server" || stem == "app" || stem == "index"
+}
+
+fn matches_stem(fname: &str, stems: &[&str]) -> bool {
+    let stem = get_stem(fname);
+    stems.iter().any(|s| stem == *s)
+}
+
+fn ends_with_stem(fname: &str, suffix_stems: &[&str]) -> bool {
+    let stem = get_stem(fname);
+    suffix_stems.iter().any(|s| stem.ends_with(s))
+}
+
 pub fn find(snap: &FileSnapshot, ctx: &FindingContext<'_>) -> Vec<Advisory> {
     let fname = snap.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let source = &snap.content;
 
     let mut advisories: Vec<Advisory> = Vec::new();
 
-    if fname == "server.js" || fname == "app.js" || fname == "index.js" {
+    if is_server_entry(fname) {
         for check in CHECKS {
             let in_active = patterns_in_active_code(source, check.active_patterns);
             if in_active {
@@ -177,14 +196,8 @@ pub fn find(snap: &FileSnapshot, ctx: &FindingContext<'_>) -> Vec<Advisory> {
     }
 
     // Check: A2-USER_ENUM — login error message reveals whether user exists
-    if fname.ends_with("-dao.js")
-        || fname.ends_with("_dao.js")
-        || fname.ends_with("session.js")
-        || fname.ends_with("auth.js")
-        || fname.ends_with("login.js")
-        || fname == "server.js"
-        || fname == "app.js"
-        || fname == "index.js"
+    if ends_with_stem(fname, &["-dao", "_dao", "session", "auth", "login"])
+        || is_server_entry(fname)
     {
         if let Some(line) = find_user_enumeration(source) {
             advisories.push(
@@ -198,14 +211,7 @@ pub fn find(snap: &FileSnapshot, ctx: &FindingContext<'_>) -> Vec<Advisory> {
     }
 
     // Check: A2-WEAK_PW — no password minimum length in config (on password-handling files)
-    if fname.ends_with("-dao.js")
-        || fname.ends_with("_dao.js")
-        || fname.ends_with("session.js")
-        || fname.ends_with("user.js")
-        || fname.ends_with("auth.js")
-        || fname == "server.js"
-        || fname == "app.js"
-        || fname == "index.js"
+    if ends_with_stem(fname, &["-dao", "_dao", "session", "user", "auth"]) || is_server_entry(fname)
     {
         if let Some(line) = find_weak_password_policy(source) {
             advisories.push(
@@ -219,12 +225,7 @@ pub fn find(snap: &FileSnapshot, ctx: &FindingContext<'_>) -> Vec<Advisory> {
     }
 
     // Check: A2-NO_SESSION_REGENERATE — session not regenerated on login (any file)
-    if fname.ends_with("-dao.js")
-        || fname.ends_with("_dao.js")
-        || fname.ends_with("session.js")
-        || fname.ends_with("auth.js")
-        || fname.ends_with("login.js")
-    {
+    if ends_with_stem(fname, &["-dao", "_dao", "session", "auth", "login"]) {
         if let Some(line) = find_no_session_regenerate(source) {
             advisories.push(
                 Advisory::bare("A2-NO_SESSION_REGENERATE", Severity::Warning, snap.id, &snap.path,
@@ -237,7 +238,7 @@ pub fn find(snap: &FileSnapshot, ctx: &FindingContext<'_>) -> Vec<Advisory> {
     }
 
     // Check: A7-NO_ADMIN_CHECK — admin routes missing authorization
-    if fname.ends_with("index.js") || fname.ends_with("admin.js") || fname.ends_with("routes.js") {
+    if ends_with_stem(fname, &["index", "admin", "routes"]) {
         if let Some(line) = find_no_admin_check(source) {
             advisories.push(
                 Advisory::bare("A7-NO_ADMIN_CHECK", Severity::Warning, snap.id, &snap.path,
@@ -250,7 +251,7 @@ pub fn find(snap: &FileSnapshot, ctx: &FindingContext<'_>) -> Vec<Advisory> {
     }
 
     // Check: A1-LOG_INJECTION — user input logged without sanitization
-    if fname.ends_with("session.js") || fname.ends_with("auth.js") || fname.ends_with("login.js") {
+    if ends_with_stem(fname, &["session", "auth", "login"]) {
         if let Some(line) = find_active_line_number(source, "console.log(\"Error:") {
             advisories.push(
                 Advisory::bare("A1-LOG_INJECTION", Severity::Warning, snap.id, &snap.path,
@@ -263,7 +264,7 @@ pub fn find(snap: &FileSnapshot, ctx: &FindingContext<'_>) -> Vec<Advisory> {
     }
 
     // Check: A3-WRONG_ENCODING — output encoding in wrong context (HTML vs URL)
-    if fname == "profile.js" || fname == "user.js" {
+    if matches_stem(fname, &["profile", "user"]) {
         for line in find_active_lines(source, |l| {
             l.contains("encodeForHTML") && (l.contains("website") || l.contains("url"))
         }) {
@@ -278,10 +279,7 @@ pub fn find(snap: &FileSnapshot, ctx: &FindingContext<'_>) -> Vec<Advisory> {
     }
 
     // Check: A4-IDOR_PARAM — sensitive ID from URL params instead of session
-    if fname.ends_with("allocations.js")
-        || fname.ends_with("profile.js")
-        || fname.ends_with("users.js")
-    {
+    if ends_with_stem(fname, &["allocations", "profile", "users"]) {
         let active = strip_comments(source);
         // Check for req.params destructuring pattern (may span multiple lines)
         if active.contains("req.params") && active.contains("userId") {
@@ -299,8 +297,7 @@ pub fn find(snap: &FileSnapshot, ctx: &FindingContext<'_>) -> Vec<Advisory> {
     }
 
     // Check: A10-SSRF — user-controlled URL passed to HTTP client
-    if fname.ends_with("research.js") || fname.ends_with("proxy.js") || fname.ends_with("fetch.js")
-    {
+    if ends_with_stem(fname, &["research", "proxy", "fetch"]) {
         if let Some(line) = find_active_line_number(source, "needle.get(") {
             advisories.push(
                 Advisory::bare("A10-SSRF", Severity::Critical, snap.id, &snap.path,
@@ -313,10 +310,7 @@ pub fn find(snap: &FileSnapshot, ctx: &FindingContext<'_>) -> Vec<Advisory> {
     }
 
     // Check: REDOS — regex with nested quantifier causing catastrophic backtracking
-    if fname.ends_with("profile.js")
-        || fname.ends_with("validate.js")
-        || fname.ends_with("regex.js")
-    {
+    if ends_with_stem(fname, &["profile", "validate", "regex"]) {
         for line in find_active_lines(source, |l| {
             l.contains("+)+") || l.contains("+}+") || l.contains("*)+") || l.contains("*}+")
         }) {
@@ -331,7 +325,7 @@ pub fn find(snap: &FileSnapshot, ctx: &FindingContext<'_>) -> Vec<Advisory> {
     }
 
     // Check: HPP_DOS — calling string methods (.trim()) on unchecked input vulnerable to HPP
-    if fname.ends_with("profile.js") || fname.ends_with("user.js") || fname.ends_with("auth.js") {
+    if ends_with_stem(fname, &["profile", "user", "auth"]) {
         for line in find_active_lines(source, |l| {
             l.contains(".trim(")
                 && (l.contains("firstName") || l.contains("lastName") || l.contains("body"))
