@@ -19,6 +19,7 @@ pub fn print_help() {
     println!();
     println!("Detection Options:");
     println!("  --corpus <dir>      Load detection patterns from corpus directory");
+    println!("  --use-compiler      Enable exact semantic resolution (Oxc for TS, rust-analyzer for RS)");
     println!("  --threshold <0-1>   Corpus match threshold (default: 0.40)");
     println!("  --language <lang>   Language filter: rust, typescript, javascript, yaml");
     println!("  --diff-only         Only scan files changed since the last git commit");

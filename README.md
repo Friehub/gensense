@@ -133,6 +133,17 @@ The Frensense detection corpus is built from real-world vulnerability data:
 
 > Semgrep, Inc. (2024). *Semgrep Rules Repository*. GitHub. https://github.com/semgrep/semgrep-rules
 
+## V0.5.0 Compiler Mode
+
+In v0.5.0, Frensense introduced **Compiler Mode**, which shifts from heuristic syntax parsing to exact semantic resolution. 
+By passing the `--use-compiler` flag, Frensense mounts full language servers during the scan:
+* **TypeScript/JavaScript**: Loads the lightning-fast Oxc compiler pipeline to resolve complex module aliases, scoped types, and cross-file dataflow.
+* **Rust**: Leverages the `rust-analyzer` hir (High-Level Intermediate Representation) for precise trait resolution, macro expansion, and dataflow integrity.
+
+```bash
+frensense src/ --use-compiler
+```
+
 ## Corpus Quality Guide
 
 The engine is only as good as its corpus. A pattern with a 3-line toy function
